@@ -1,0 +1,326 @@
+library(stats4)
+library(ggplot2)
+library(boot)
+
+# Data Preparation
+# Replace the following lines with your own data
+# Example format:
+# dose <- c(10, 50, 100, 500)        # Doses in appropriate units
+# total <- c(20, 20, 20, 20)         # Total number of hosts in each group
+# infected <- c(2, 5, 10, 15)        # Number of infected hosts in each group
+
+dataframe <- data.frame(dose = dose, total = total, infected = infected)
+
+# Beta-Poisson Model Prediction Function
+pred.betaPoisson <- function(alpha, N50, data) {
+    f <- 1 - (1 + data$dose * (2^(1/alpha) - 1) / N50)^-alpha
+    return(f)
+}
+
+# Deviance Function
+deviance <- function(params, data) {
+    alpha <- params[1]
+    N50 <- params[2]
+    fpred <- pred.betaPoisson(alpha, N50, data)
+    fobs <- data$infected / data$total
+    Y1 <- data$infected * log(fpred / (fobs + 1e-15))
+    Y2 <- (data$total - data$infected) * log((1 - fpred) / (1 - fobs + 1e-15))
+    Y <- -2 * (sum(Y1) + sum(Y2))
+    return(Y)
+}
+
+# Optimization using Nelder-Mead Method with new starting values , alpha=0.1, N50=1000
+best <- optim(c(0.1, 1000), deviance, gr = NULL, dataframe, method = "Nelder-Mead", control = list(trace = 10))
+print(best)
+
+# Assuming that the 'best' object is the result of your optimization using optim()
+# and 'dataframe' is your data
+
+# Extract the optimized parameters
+optimized_alpha <- best$par[1]
+optimized_N50 <- best$par[2]
+
+
+# Assuming 'best' is the result from your optim() call for fitting the model
+
+# Recalculate the Hessian matrix at the optimized parameters
+optim_result_with_hessian <- optim(best$par, deviance, gr = NULL, dataframe, method = "BFGS", hessian = TRUE)
+
+# Calculate standard errors from the Hessian
+# The Hessian matrix is the matrix of second derivatives of the log-likelihood
+# Inverse of the Hessian gives the variance-covariance matrix
+hessian_matrix <- optim_result_with_hessian$hessian
+std_errors <- sqrt(diag(solve(hessian_matrix)))
+
+# Standard errors for alpha and N50
+std_error_alpha <- std_errors[1]
+std_error_N50 <- std_errors[2]
+
+# Print the standard errors
+cat("Standard Error for alpha:", std_error_alpha, "\n")
+cat("Standard Error for N50:", std_error_N50, "\n")
+
+# Assuming 'best' contains the optimized parameters
+# and 'std_error_alpha' and 'std_error_N50' are the standard errors for alpha and N50
+
+# Extract optimized parameters
+alpha <- best$par[1]
+N50 <- best$par[2]
+
+# 95% Confidence Interval for alpha
+ci_alpha_lower <- alpha - 1.96 * std_error_alpha
+ci_alpha_upper <- alpha + 1.96 * std_error_alpha
+
+# 95% Confidence Interval for N50
+ci_N50_lower <- N50 - 1.96 * std_error_N50
+ci_N50_upper <- N50 + 1.96 * std_error_N50
+
+# Print the confidence intervals
+cat("95% Confidence Interval for alpha:", ci_alpha_lower, "to", ci_alpha_upper, "\n")
+cat("95% Confidence Interval for N50:", ci_N50_lower, "to", ci_N50_upper, "\n")
+
+# Calculate the log-likelihood
+logLikFun <- function(params, data) {
+  alpha <- params[1]
+  N50 <- params[2]
+  fpred <- pred.betaPoisson(alpha, N50, data)
+  fobs <- data$infected / data$total
+  logLik <- sum(dbinom(data$infected, data$total, fpred, log = TRUE))
+  return(logLik)
+}
+logLikValue <- logLikFun(c(optimized_alpha, optimized_N50), dataframe)
+
+# Number of parameters (alpha and N50) and the sample size
+nparams <- 2
+nsamples <- nrow(dataframe)
+
+# Calculate AIC
+AIC_value <- -2 * logLikValue + 2 * nparams
+
+# Calculate BIC
+BIC_value <- -2 * logLikValue + log(nsamples) * nparams
+
+# Print the results
+cat("AIC:", AIC_value, "\n")
+cat("BIC:", BIC_value, "\n")
+# Calculate the expected frequencies using the optimized model
+expected_infected <- pred.betaPoisson(optimized_alpha, optimized_N50, dataframe) * dataframe$total
+
+# Observed frequencies are the actual number of infected mice
+observed_infected <- dataframe$infected
+
+# Perform Chi-Square Goodness of Fit Test
+chi_square_test <- chisq.test(x = observed_infected, p = expected_infected, rescale.p = TRUE)
+
+# Print the results
+print(chi_square_test)
+# Calculate the expected infected counts using the optimized model
+expected_counts <- pred.betaPoisson(optimized_alpha, optimized_N50, dataframe) * dataframe$total
+
+# Create a data frame to display dose, observed infected, and expected infected counts
+comparison_df <- data.frame(
+  dose = dataframe$dose,
+  observed_infected = dataframe$infected,
+  expected_infected = round(expected_counts)  # rounding for easier interpretation
+)
+
+# Print the comparison data frame
+print(comparison_df)
+# Assuming you have already run the previous parts of the script
+# and have the variables 'observed_infected' and 'expected_infected'
+
+# G-Test Function
+g.test <- function(observed, expected) {
+  observed <- as.numeric(observed)
+  expected <- as.numeric(expected)
+  G <- 2 * sum(ifelse(observed == 0, 0, observed * log(observed / expected)))
+  p.value <- pchisq(G, df = length(observed) - 1, lower.tail = FALSE)
+  return(list(statistic = G, p.value = p.value))
+}
+
+# Perform G-Test
+g_test_result <- g.test(observed_infected, expected_infected)
+
+# Print the results
+print(g_test_result)
+
+
+# Assuming 'best' is the result of your optimization and 'deviance' is your deviance function
+# Also assuming you have your data in 'dataframe'
+
+# Extract optimized parameters
+optimized_params <- best$par
+
+# Calculate the optimized deviance
+optimized_deviance <- deviance(optimized_params, dataframe)
+
+# Degrees of freedom: Number of observations minus number of parameters
+# Adjust the number of observations and parameters as per your model
+df <- nrow(dataframe) - length(optimized_params)
+
+# Calculate the p-value by comparing the optimized deviance to the chi-square distribution
+p_value_chi_square <- pchisq(optimized_deviance, df, lower.tail = FALSE)
+
+# Print the p-value
+cat("Optimized Deviance:", optimized_deviance, "\n")
+cat("P-value from Chi-Square Distribution:", p_value_chi_square, "\n")
+
+# Plotting dose response curve with observed points
+
+# Create a finer sequence of doses for a smoother curve
+fine_dose_seq <- seq(min(dose), max(dose), length.out = 1000)
+
+# Create a new data frame for the finer prediction
+fine_predict_data <- data.frame(dose = fine_dose_seq)
+
+# Calculate the predicted response and confidence intervals for the finer dose sequence
+fine_predict_data$Predicted <- pred.betaPoisson(best$par[1], best$par[2], fine_predict_data)
+fine_predict_data$LowerCI <- pred.betaPoisson(conf.intervals[1, 1], conf.intervals[2, 1], fine_predict_data)
+fine_predict_data$UpperCI <- pred.betaPoisson(conf.intervals[1, 2], conf.intervals[2, 2], fine_predict_data)
+
+# Convert original data for ggplot
+plot_data <- data.frame(Dose = dataframe$dose, Observed = dataframe$infected / dataframe$total)
+
+# Generate the plot with ggplot2
+ggplot() +
+  geom_ribbon(data = predictions, aes(x = dose, ymin = lower, ymax = upper), fill = "lightgray", alpha = 0.5) +  # CI as shaded area
+  geom_line(data = fine_predict_data, aes(x = dose, y = Predicted), color = "black", size = 0.4) +  # Smoother main dose-response curve
+  geom_line(data = predictions, aes(x = dose, y = lower), color = "blue", linetype = "dashed") +  # Lower CI bound as a dashed line in blue
+  geom_line(data = predictions, aes(x = dose, y = upper), color = "green", linetype = "dashed") +  # Upper CI bound as a dashed line in green
+  geom_point(data = plot_data, aes(x = Dose, y = Observed), color = "red") +  # Observed data points in red
+  scale_x_log10() +  # Log10 scale for x-axis
+  labs(x = "Dose (log10 scale)", y = "Probability of Infection",
+       title = "Dose-Response Curve with 95% CI",
+       subtitle = "Predicted Model with Confidence Interval and Observed Data (Log10 Dose Scale)") +
+  theme_minimal()
+ 
+#Performing sensitivity analysis
+# Assuming you have the values for std_error_alpha and std_error_N50 from the previous analysis
+se_alpha <- std_error_alpha
+se_N50 <- std_error_N50
+
+# Define ranges for alpha and N50 based on their standard errors
+alpha_range <- seq(optimized_alpha - 2 * se_alpha, optimized_alpha + 2 * se_alpha, length.out = 10)
+N50_range <- seq(optimized_N50 - 2 * se_N50, optimized_N50 + 2 * se_N50, length.out = 10)
+
+# Assuming 'dose' is a vector of interest for the sensitivity analysis. Define it as per your data.
+doses <- dataframe$dose
+
+# Function to apply the Beta-Poisson model
+beta_poisson_model <- function(dose, alpha, N50) {
+  return(1 - (1 + dose * (2^(1/alpha) - 1) / N50)^-alpha)
+}
+
+# Create a data frame for sensitivity analysis results
+sensitivity_results <- expand.grid(alpha = alpha_range, N50 = N50_range, dose = doses)
+sensitivity_results$probability <- apply(sensitivity_results, 1, function(row) {
+  beta_poisson_model(as.numeric(row['dose']), as.numeric(row['alpha']), as.numeric(row['N50']))
+})
+
+# Plotting the sensitivity analysis results using ggplot2
+library(ggplot2)
+
+ggplot(sensitivity_results, aes(x = alpha, y = N50, color = probability)) +
+  geom_point() +
+  facet_wrap(~ dose) +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(title = "Sensitivity Analysis of Beta-Poisson Model",
+       x = "Alpha",
+       y = "N50",
+       color = "Probability")
+
+# Assuming the beta_poisson_model function is already defined
+
+# Define ranges for alpha and N50 based on their optimized values and standard errors
+alpha_range <- seq(optimized_alpha - 2 * se_alpha, optimized_alpha + 2 * se_alpha, length.out = 10)
+N50_range <- seq(optimized_N50 - 2 * se_N50, optimized_N50 + 2 * se_N50, length.out = 10)
+
+# Create a grid for sensitivity analysis
+grid <- expand.grid(alpha = alpha_range, N50 = N50_range, dose = doses)
+
+# Apply the Beta-Poisson model across the grid
+sensitivity_df <- transform(grid, probability = mapply(beta_poisson_model, dose, alpha, N50))
+
+# Define a high probability threshold
+high_probability_threshold = 0.8  # Adjust as needed
+
+# Filter for high probabilities
+high_probability_results <- subset(sensitivity_df, probability > high_probability_threshold)
+
+# Find ranges of alpha and N50 for high probabilities
+alpha_high_prob_range <- range(high_probability_results$alpha)
+N50_high_prob_range <- range(high_probability_results$N50)
+
+# Print the ranges
+cat("Alpha range leading to high probabilities:", alpha_high_prob_range[1], "to", alpha_high_prob_range[2], "\n")
+cat("N50 range leading to high probabilities:", N50_high_prob_range[1], "to", N50_high_prob_range[2], "\n")
+
+ #Identifying doses where model underestimates or overestimates probabilities
+# Assuming beta_poisson_model, optimized_alpha, and optimized_N50 are already defined
+
+# Calculate the predicted probabilities using the optimized model parameters
+dataframe$predicted_prob = beta_poisson_model(dataframe$dose, optimized_alpha, optimized_N50)
+
+# Calculate the observed infection rate
+dataframe$observed_rate = dataframe$infected / dataframe$total
+
+# Calculate residuals (difference between observed and predicted)
+dataframe$residuals = dataframe$observed_rate - dataframe$predicted_prob
+
+# Inspect the residuals for each dose
+print(dataframe[, c('dose', 'observed_rate', 'predicted_prob', 'residuals')])
+
+# Identify doses where the model underestimates or overestimates
+underestimates = dataframe[dataframe$residuals < 0, 'dose']
+overestimates = dataframe[dataframe$residuals > 0, 'dose']
+
+cat("Doses where the model underestimates the infection rate:", underestimates, "\n")
+cat("Doses where the model overestimates the infection rate:", overestimates, "\n")
+
+
+library(boot)
+
+# Bootstrap function
+bootstrap_function <- function(data, indices) {
+    # Sample the data
+    sample_data <- data[indices, ]
+    # Fit the model
+    fit <- optim(c(0.5, 10), deviance, gr = NULL, sample_data, method = "Nelder-Mead")
+    return(fit$par)
+}
+
+# Perform bootstrap
+set.seed(123)  # For reproducibility
+bootstrap_results <- boot(dataframe, bootstrap_function, R = 10000)
+
+# Function to calculate dose for a given response
+calculate_dose <- function(alpha, N50, response) {
+    return(N50 * ((1 / (1 - response))^(1 / alpha) - 1) / (2^(1 / alpha) - 1))
+}
+
+# Calculate doses for 10% and 50% responses
+doses_10 <- apply(bootstrap_results$t, 1, function(params) calculate_dose(params[1], params[2], 0.1))
+doses_50 <- apply(bootstrap_results$t, 1, function(params) calculate_dose(params[1], params[2], 0.5))
+
+# Results
+cat("10% Response Doses:\n", doses_10, "\n")
+cat("50% Response Doses:\n", doses_50, "\n")
+
+# Calculate the mean  dose for 10% and 50% response levels
+mean_dose_10 <- mean(doses_10)
+mean_dose_50 <- mean(doses_50)
+
+
+# Print the results
+cat("Mean Dose for 10% Response:", mean_dose_10, "\n")
+cat("Mean Dose for 50% Response:", mean_dose_50, "\n")
+
+# Calculate the 95% confidence intervals for the mean dose
+ci_mean_dose_10 <- quantile(doses_10, probs = c(0.025, 0.975))
+ci_mean_dose_50 <- quantile(doses_50, probs = c(0.025, 0.975))
+
+# Print the results
+cat("Mean ID10:", mean_dose_10, "\n")
+cat("95% Confidence Interval for Mean ID10:", ci_mean_dose_10, "\n")
+cat("Mean ID50:", mean_dose_50, "\n")
+cat("95% Confidence Interval for Mean ID50:", ci_mean_dose_50, "\n")

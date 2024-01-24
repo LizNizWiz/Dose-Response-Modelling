@@ -1,0 +1,178 @@
+library(stats4)
+
+# Define your dataset
+# Replace the following lines with your own data
+# Example format:
+# dose <- c(10, 50, 100, 500)        # Doses in appropriate units
+# total <- c(20, 20, 20, 20)         # Total number of hosts in each group
+# infected <- c(2, 5, 15, 18)        # Number of infected hosts in each group
+
+# Define the negative log-likelihood function
+negLogLikelihood <- function(k) {
+  # Calculate the probability of infection for each dose
+  p_model <- 1 - exp(-dose / k)
+  
+  # Constrain probabilities to avoid extreme values (0 or 1)
+  p_model <- pmin(pmax(p_model, 1e-3), 1 - 1e-3)
+
+  # Calculate the negative log-likelihood
+  -sum(dbinom(infected, total, p_model, log = TRUE))
+}
+
+# Optimization using the BFGS method
+# The initial parameter 'k' is set as a starting point and can be adjusted
+opt_result <- optim(par = c(k = 100), fn = negLogLikelihood, method = "BFGS")
+
+# Extract the estimated parameter and other results
+k_estimate <- opt_result$par
+neg_log_likelihood <- opt_result$value
+deviance <- 2 * neg_log_likelihood
+
+# Calculate the standard error using the inverse of the Hessian matrix
+hessian_inv <- solve(opt_result$hessian)
+std_error <- sqrt(diag(hessian_inv))
+
+# Calculate the 95% confidence interval
+z_value <- qnorm(0.975)  # Quantile for the 95% CI
+ci_lower <- k_estimate - z_value * std_error
+ci_upper <- k_estimate + z_value * std_error
+
+# Print the results
+cat("Estimated k:", k_estimate, "\n")
+cat("Negative log-likelihood:", neg_log_likelihood, "\n")
+cat("Deviance:", deviance, "\n")
+
+# Print the results including standard error and confidence interval
+cat("Estimated k:", k_estimate, "\n")
+cat("Standard Error:", std_error, "\n")
+cat("95% CI: [", ci_lower, ",", ci_upper, "]\n")
+
+# Number of parameters in the model
+num_params <- length(k_estimate)
+
+# Number of observations
+num_obs <- length(dose)
+
+# Calculate AIC
+aic <- 2 * num_params - 2 * (-neg_log_likelihood)
+
+# Calculate BIC
+bic <- log(num_obs) * num_params - 2 * (-neg_log_likelihood)
+
+# Print the AIC and BIC
+cat("AIC:", aic, "\n")
+cat("BIC:", bic, "\n")
+
+# Calculate the expected number of infected hosts using the model
+p_estimated <- 1 - exp(-dose / k_estimate)
+expected_infected <- total * p_estimated
+
+# Perform the chi-square goodness of fit test
+chi_sq_test <- chisq.test(x = infected, p = p_estimated, rescale.p = TRUE)
+
+# Print the results of the chi-square test
+cat("Chi-square Test Statistic:", chi_sq_test$statistic, "\n")
+cat("P-value:", chi_sq_test$p.value, "\n")
+
+# Calculate the G-test statistic
+g_statistic <- 2 * sum(infected * log(ifelse(infected == 0, 1, infected / expected_infected)))
+
+# Degrees of freedom for the G-test
+df <- length(dose) - 1
+
+# Calculate the p-value
+g_test_p_value <- pchisq(g_statistic, df, lower.tail = FALSE)
+
+# Print the results of the G-test
+cat("G-test Statistic:", g_statistic, "\n")
+cat("P-value:", g_test_p_value, "\n")
+
+set.seed(123)  # For reproducibility
+
+# Number of bootstrap trials
+n_boot <- 10000
+
+# Initialize vectors to store bootstrap results
+k_boot <- numeric(n_boot)
+ID10_boot <- numeric(n_boot)
+ID50_boot <- numeric(n_boot)
+
+# Bootstrap procedure
+for(i in 1:n_boot) {
+  # Resample the data
+  boot_indices <- sample(1:length(dose), size = length(dose), replace = TRUE)
+  dose_boot <- dose[boot_indices]
+  infected_boot <- infected[boot_indices]
+  total_boot <- total[boot_indices]
+
+  # Re-estimate k using the resampled data
+  negLogLikelihood_boot <- function(k) {
+    p_model <- 1 - exp(-dose_boot / k)
+    p_model <- pmin(pmax(p_model, 1e-3), 1 - 1e-3)
+    -sum(dbinom(infected_boot, total_boot, p_model, log = TRUE))
+  }
+  opt_result_boot <- optim(par = c(k = 100), fn = negLogLikelihood_boot, method = "BFGS", hessian = TRUE)
+  k_boot[i] <- opt_result_boot$par
+
+  # Calculate ID10 and ID50 for this bootstrap sample
+  ID10_boot[i] <- -log(1 - 0.10) * k_boot[i]
+  ID50_boot[i] <- -log(1 - 0.50) * k_boot[i]
+}
+
+# Calculate the mean of ID10 and ID50 across all bootstrap samples
+mean_ID10 <- mean(ID10_boot)
+mean_ID50 <- mean(ID50_boot)
+
+# Print the results
+cat("Mean ID10 across bootstrap samples:", mean_ID10, "\n")
+cat("Mean ID50 across bootstrap samples:", mean_ID50, "\n")
+
+# Calculate the standard errors for ID10 and ID50
+std_error_ID10 <- sd(ID10_boot)
+std_error_ID50 <- sd(ID50_boot)
+
+# Calculate the 95% confidence intervals
+z_value <- qnorm(0.975)  # Quantile for the 95% CI
+ci_lower_ID10 <- mean_ID10 - z_value * std_error_ID10
+ci_upper_ID10 <- mean_ID10 + z_value * std_error_ID10
+ci_lower_ID50 <- mean_ID50 - z_value * std_error_ID50
+ci_upper_ID50 <- mean_ID50 + z_value * std_error_ID50
+
+# Print the results
+cat("ID10 - Mean:", mean_ID10, "SE:", std_error_ID10, "95% CI: [", ci_lower_ID10, ",", ci_upper_ID10, "]\n")
+cat("ID50 - Mean:", mean_ID50, "SE:", std_error_ID50, "95% CI: [", ci_lower_ID50, ",", ci_upper_ID50, "]\n")
+
+#Plotting graph
+# Load necessary library
+library(ggplot2)
+
+# Calculate the observed proportion of infected mice at each dose
+observed_proportion <- infected / total
+
+# Create a sequence of doses for the smooth curve
+dose_seq <- seq(min(dose), max(dose), length.out = 100)
+
+# Calculate the predicted probabilities using the estimated k
+predicted_probabilities <- 1 - exp(-dose_seq / k_estimate)
+
+# Create a data frame for plotting
+plot_data <- data.frame(
+  Dose = dose_seq,
+  Predicted = predicted_probabilities,
+  Dose_Observed = dose,
+  Observed = observed_proportion
+)
+
+# Generate the plot 
+ggplot(predicted_data, aes(x = Dose)) +
+  geom_ribbon(aes(ymin = LowerCI, ymax = UpperCI), fill = "lightgray", alpha = 0.5) +  # CI as shaded area
+  geom_line(aes(y = LowerCI), color = "blue", linetype = "dashed") +  # Lower CI bound as a dashed line in blue
+  geom_line(aes(y = UpperCI), color = "green", linetype = "dashed") +  # Upper CI bound as a dashed line in green
+  geom_line(aes(y = Predicted), color = "black", size = 0.4) +  # Main dose-response curve in black, thinner
+  geom_point(data = plot_data, aes(x = Dose, y = Observed), color = "red") +  # Observed data points in red
+  scale_x_log10() +  # Log10 scale for x-axis
+  labs(x = "Dose (log10 scale)", y = "Probability of Infection",
+       title = "Dose-Response Curve with 95% CI for k",
+       subtitle = "Predicted Model with Confidence Interval and Observed Data (Log10 Dose Scale)") +
+  theme_minimal()
+
